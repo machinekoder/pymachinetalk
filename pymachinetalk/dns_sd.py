@@ -1,10 +1,13 @@
 import sys
 import avahi
-import dbus
 import pprint
-import inspect
 import avahi.ServiceTypeDatabase
-import dbus.glib
+
+import dbus
+import gobject
+gobject.threads_init()
+from dbus.mainloop.glib import DBusGMainLoop
+
 import threading
 
 
@@ -46,13 +49,17 @@ class ServiceDiscovery():
         self.uuid = uuid
         self.interface = interface
         try:
-            self.system_bus = dbus.SystemBus()
+            loop = DBusGMainLoop()
+            self.system_bus = dbus.SystemBus(mainloop=loop)
             self.system_bus.add_signal_receiver(self.avahi_dbus_connect_cb, "NameOwnerChanged", "org.freedesktop.DBus", arg0="org.freedesktop.Avahi")
         except dbus.DBusException, e:
             pprint.pprint(e)
             sys.exit(1)
 
         self.service_browsers = {}
+
+    def __del__(self):
+        self.stop()
 
     def wait_discovered(self, timeout=None):
         with self.discovered_condition:
@@ -76,10 +83,10 @@ class ServiceDiscovery():
 
     def avahi_dbus_connect_cb(self, a, connect, disconnect):
         if connect != "":
-            print "We are disconnected from avahi-daemon"
+            print("We are disconnected from avahi-daemon")
             self.stop_service_discovery()
         else:
-            print "We are connected to avahi-daemon"
+            print("We are connected to avahi-daemon")
             self.start_service_discovery()
 
     def siocgifname(self, interface):
@@ -94,8 +101,8 @@ class ServiceDiscovery():
         stdb = ServiceTypeDatabase()
         h_type = stdb.get_human_type(servicetype)
         if self.debug:
-            print "Service data for service '%s' of type '%s' (%s) in domain '%s' on %s.%i:" % (name, h_type, servicetype, domain, self.siocgifname(interface), protocol)
-            print "\tHost %s (%s), port %i, TXT data: %s" % (host, address, port, avahi.txt_array_to_string_array(txt))
+            print("Service data for service '%s' of type '%s' (%s) in domain '%s' on %s.%i:" % (name, h_type, servicetype, domain, self.siocgifname(interface), protocol))
+            print("\tHost %s (%s), port %i, TXT data: %s" % (host, address, port, avahi.txt_array_to_string_array(txt)))
 
         txts = avahi.txt_array_to_string_array(txt)
         match = False
@@ -133,7 +140,7 @@ class ServiceDiscovery():
     def new_service(self, interface, protocol, name, servicetype, domain, flags):
         del flags
         if self.debug:
-            print "Found service '%s' of type '%s' in domain '%s' on %s.%i." % (name, servicetype, domain, self.siocgifname(interface), protocol)
+            print("Found service '%s' of type '%s' in domain '%s' on %s.%i." % (name, servicetype, domain, self.siocgifname(interface), protocol))
 
 # this check is for local services
 #        try:
@@ -147,7 +154,7 @@ class ServiceDiscovery():
     def remove_service(self, interface, protocol, name, servicetype, domain, flags):
         del flags
         if self.debug:
-            print "Service '%s' of type '%s' in domain '%s' on %s.%i disappeared." % (name, servicetype, domain, self.siocgifname(interface), protocol)
+            print("Service '%s' of type '%s' in domain '%s' on %s.%i disappeared." % (name, servicetype, domain, self.siocgifname(interface), protocol))
         if name in self.service_names:
             with self.disappeared_condition:
                 data = self.service_names.pop(name)
@@ -159,17 +166,20 @@ class ServiceDiscovery():
 
     def add_service_type(self, interface, protocol, servicetype, domain):
         # Are we already browsing this domain for this type?
-        if self.service_browsers in (interface, protocol, servicetype, domain):
+        if (interface, protocol, servicetype, domain) in self.service_browsers:
             return
 
         if self.debug:
-            print "Browsing for services of type '%s' in domain '%s' on %s.%i ..." % (servicetype, domain, self.siocgifname(interface), protocol)
+            print("Browsing for services of type '%s' in domain '%s' on %s.%i ..." % (servicetype, domain, self.siocgifname(interface), protocol))
 
         b = dbus.Interface(self.system_bus.get_object(avahi.DBUS_NAME,
                                                       self.server.ServiceBrowserNew(interface, protocol, servicetype, domain, dbus.UInt32(0))),
                            avahi.DBUS_INTERFACE_SERVICE_BROWSER)
         b.connect_to_signal('ItemNew', self.new_service)
         b.connect_to_signal('ItemRemove', self.remove_service)
+        b.connect_to_signal('AllForNow', self.all_for_now_handler)
+        b.connect_to_signal('CacheExhausted', self.cache_exhausted_handler)
+        b.connect_to_signal('Failure', self.failure_handler)
 
         self.service_browsers[(interface, protocol, servicetype, domain)] = b
 
@@ -185,9 +195,20 @@ class ServiceDiscovery():
             pass
         del self.service_browsers[service]
 
+    def all_for_now_handler(self):
+        if self.debug:
+            print('all for now')
+
+    def cache_exhausted_handler(self):
+        if self.debug:
+            print('cache exhausted')
+
+    def failure_handler(self, error):
+        print('failure: %s' % error)
+
     def start_service_discovery(self):
         if len(self.domain) != 0:
-            print "domain not null %s" % (self.domain)
+            print("domain not null %s" % (self.domain))
             print("Already Discovering")
             return
         try:
@@ -195,11 +216,11 @@ class ServiceDiscovery():
                                          avahi.DBUS_INTERFACE_SERVER)
             self.domain = self.server.GetDomainName()
         except:
-            print "Check that the Avahi daemon is running!"
+            print("Check that the Avahi daemon is running!")
             return
 
         if self.debug:
-            print "Starting discovery"
+            print("Starting discovery")
 
         if self.interface == "":
             interface = avahi.IF_UNSPEC
@@ -211,8 +232,16 @@ class ServiceDiscovery():
 
     def stop_service_discovery(self):
         if len(self.domain) == 0:
-            print "Discovery already stopped"
+            if self.debug:
+                print("Discovery already stopped")
             return
 
+        for sb in self.service_browsers.values():
+            try:
+                sb.Free()  # clean up service browsers
+            except dbus.DBusException:
+                pass
+        self.service_browsers = {}
+
         if self.debug:
-            print "Discovery stopped"
+            print("Discovery stopped")
