@@ -23,6 +23,7 @@ class BasicClass(threading.Thread):
         launcher_sd.start()
         assert launcher_sd.wait_discovered(timeout)
         data = launcher_sd.service_names.values()[0]
+        launcher_sd.stop()
         print('launcher discovered %s %s' % (data.name, data.dsn))
         uuid = data.uuid
         print('uuid=%s' % uuid)
@@ -32,6 +33,7 @@ class BasicClass(threading.Thread):
         halrcmd_sd.start()
         assert halrcmd_sd.wait_discovered(timeout)
         data = halrcmd_sd.service_names.values()[0]
+        halrcmd_sd.stop()
         print('halrcmd discovered %s %s' % (data.name, data.dsn))
         halrcmd_dsn = data.dsn
 
@@ -40,6 +42,7 @@ class BasicClass(threading.Thread):
         halrcomp_sd.start()
         assert halrcomp_sd.wait_discovered(timeout)
         data = halrcomp_sd.service_names.values()[0]
+        halrcomp_sd.stop()
         print('halrcomp discovered %s %s' % (data.name, data.dsn))
         halrcomp_dsn = data.dsn
 
