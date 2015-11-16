@@ -89,27 +89,33 @@ class ParamClient():
             return
 
         if self.debug:
-            print('[%s] received message on halrcomp: topic %s' % (self.name, topic))
+            print('[%s] received message on halrcomp: topic %s' % (self.basekey, topic))
             print(self.rx)
 
         if self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
+            pass
+
+        elif self.rx.type == MT_PARAM_FULL_UPDATE:
+            pass
+
+        elif self.rx.type == MT_PARAM_ERROR:
             pass
 
     def process_paramcmd(self):
         msg = self.paramcmd_socket.recv()
         self.rx.ParseFromString(msg)
         if self.debug:
-            print('[param] received message on paramcmd:')
+            print('[%s] received message on paramcmd:' % self.basekey)
             print(self.rx)
 
         if self.rx.type == MT_PING_ACKNOWLEDGE:
             self.ping_outstanding = False
             if self.paramcmd_state == 'Trying':
                 self.update_state('Connecting')
-                #self.bind()
+                self.subscribe()
 
         else:
-            print('[param] Warning: paramcmd receiced unsupported message')
+            print('[%s Warning: paramcmd receiced unsupported message' % self.basekey)
 
     def start(self):
         self.paramcmd_state = 'Trying'
@@ -231,7 +237,7 @@ class ParamClient():
                 with self.connected_condition:
                     self.connected = True
                     self.connected_condition.notify()
-                print('[param] connected')
+                print('[%s] connected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
             elif self.connected:
@@ -239,7 +245,7 @@ class ParamClient():
                     self.connected = False
                     self.connected_condition.notify()
                 self.stop_param_heartbeat()
-                print('[param] disconnected')
+                print('[%s] disconnected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
             elif state == 'Error':
@@ -248,7 +254,7 @@ class ParamClient():
                     self.connected_condition.notify()  # notify even if not connected
 
     def update_error(self, error, description):
-        print('[param] error: %s %s' % (error, description))
+        print('[%s] error: %s %s' % (self.basekey, error, description))
 
     def ready(self):
         if not self.is_ready:
@@ -272,7 +278,7 @@ class ParamClient():
 
     def key_change(self, key):
         if self.debug:
-            print('[param] key change %s' % key.name)
+            print('[%s] key change %s' % (self.basekey, key.name))
 
         if self.state != 'Connected':  # accept only when connected
             return
