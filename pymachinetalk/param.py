@@ -89,17 +89,20 @@ class ParamClient():
             return
 
         if self.debug:
-            print('[%s] received message on halrcomp: topic %s' % (self.basekey, topic))
+            print('[%s] received message on param: topic %s' % (self.basekey, topic))
             print(self.rx)
 
-        if self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
+        if self.rx.type == MT_PARAM_FULL_UPDATE:
             pass
 
-        elif self.rx.type == MT_PARAM_FULL_UPDATE:
+        elif self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
             pass
 
         elif self.rx.type == MT_PARAM_ERROR:
             pass
+
+        else:
+            print('[%s] Warning: param receiced unsupported message' % self.basekey)
 
     def process_paramcmd(self):
         msg = self.paramcmd_socket.recv()
@@ -115,7 +118,7 @@ class ParamClient():
                 self.subscribe()
 
         else:
-            print('[%s Warning: paramcmd receiced unsupported message' % self.basekey)
+            print('[%s] Warning: paramcmd receiced unsupported message' % self.basekey)
 
     def start(self):
         self.paramcmd_state = 'Trying'
