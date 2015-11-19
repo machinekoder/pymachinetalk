@@ -92,11 +92,33 @@ class ParamClient():
             print('[%s] received message on param: topic %s' % (self.basekey, topic))
             print(self.rx)
 
-        if self.rx.type == MT_PARAM_FULL_UPDATE:
-            pass
+        if self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
+            for rkey in self.rx.key:
+                lkey = self.keysbyname[rkey.name]
+                self.key_update(rkey, lkey)
+                self.refresh_param_heartbeat()
 
-        elif self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
-            pass
+        elif self.rx.type == MT_PARAM_FULL_UPDATE:
+            for rkey in self.rx.key:
+                name = rkey.name
+                lkey = None
+                if name in self.keysbyname:
+                    lkey = self.keysbyname[name]
+                else:
+                    lkey = Key()
+                    lkey.name = name
+                    lkey.keytype = rkey.type
+                #lkey.handle = rkey.hanlde
+                #self.keysbyhandle[rkey.handle] = lkey
+                self.key_update(rkey, lkey)
+
+            if self.param_state != 'Up':  # will be executed only once
+                self.param_state = 'Up'
+                self.update_state('Connected')
+
+            if self.rx.HasField('pparams'):
+                interval = self.rx.pparams.keepalive_timer
+                self.start_param_heartbeat(interval * 2)
 
         elif self.rx.type == MT_PARAM_ERROR:
             pass
