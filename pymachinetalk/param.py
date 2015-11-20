@@ -11,11 +11,11 @@ from machinetalk.protobuf.types_pb2 import *
 
 class Key():
     def __init__(self):
-        self.value = None
         self.name = ''
         self.keytype = None
         self.metadata = None
-        self.synced = False
+        self._synced = False
+        self._value = None
         self.parent = None
         self.synced_condition = threading.Condition(threading.Lock())
         self.value_condition = threading.Condition(threading.Lock())
@@ -23,6 +23,58 @@ class Key():
         # callbacks
         self.on_synced_changed = []
         self.on_value_changed = []
+
+    def wait_synced(self, timeout=None):
+        with self.synced_condition:
+            if self.synced:
+                return True
+            self.synced_condition.wait(timeout=timeout)
+            return self.synced
+
+    def wait_value(self, timeout=None):
+        with self.value_condition:
+            if self.value:
+                return True
+            self.value_condition.wait(timeout=timeout)
+            return self.value
+
+    @property
+    def value(self):
+        with self.value_condition:
+            return self._value
+
+    @value.setter
+    def value(self, value):
+        with self.value_condition:
+            if self._value != value:
+                self._value = value
+                self.value_condition.notify()
+                for func in self.on_value_changed:
+                    func(value)
+
+    @property
+    def synced(self):
+        with self.synced_condition:
+            return self._synced
+
+    @synced.setter
+    def synced(self, value):
+        with self.synced_condition:
+            if value != self._synced:
+                self._synced = value
+                self.synced_condition.notify()
+                for func in self.on_synced_changed:
+                    func(value)
+
+    def set(self, value):
+        if self.value != value:
+            self.value = value
+            self.synced = False
+            if self.parent:
+                self.parent.pin_change(self)
+
+    def get(self):
+        return self.value
 
 
 class ParamClient():
@@ -94,9 +146,12 @@ class ParamClient():
 
         if self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
             for rkey in self.rx.key:
-                lkey = self.keysbyname[rkey.name]
+                if rkey.HasField('deleted') and rkey.deleted:
+                    self.keysbyname.pop(rkey.name)
+                else:
+                    lkey = self.keysbyname[rkey.name]
                 self.key_update(rkey, lkey)
-                self.refresh_param_heartbeat()
+            self.refresh_param_heartbeat()
 
         elif self.rx.type == MT_PARAM_FULL_UPDATE:
             for rkey in self.rx.key:
@@ -108,6 +163,7 @@ class ParamClient():
                     lkey = Key()
                     lkey.name = name
                     lkey.keytype = rkey.type
+                    self.keysbyname[name] = lkey
                 #lkey.handle = rkey.hanlde
                 #self.keysbyhandle[rkey.handle] = lkey
                 self.key_update(rkey, lkey)
@@ -120,8 +176,18 @@ class ParamClient():
                 interval = self.rx.pparams.keepalive_timer
                 self.start_param_heartbeat(interval * 2)
 
+        elif self.rx.type == MT_PING:
+            if self.param_state == 'Up':
+                self.refresh_param_heartbeat()
+            else:
+                self.update_state('Connecting')
+                self.unsubscribe()  # clean up previous subscription
+                self.subscribe()  # trigger a fresh subscribe -> full update
+
         elif self.rx.type == MT_PARAM_ERROR:
-            pass
+            self.param_state = 'Down'
+            self.update_state('Error')
+            self.update_error('param', self.rx.note)
 
         else:
             print('[%s] Warning: param receiced unsupported message' % self.basekey)
@@ -136,6 +202,7 @@ class ParamClient():
         if self.rx.type == MT_PING_ACKNOWLEDGE:
             self.ping_outstanding = False
             if self.paramcmd_state == 'Trying':
+                self.paramcmd_state = 'Up'
                 self.update_state('Connecting')
                 self.subscribe()
 
@@ -208,9 +275,6 @@ class ParamClient():
         self.paramcmd_timer.start()  # rearm timer
 
     def start_paramcmd_heartbeat(self):
-        if not self.connected:
-            return
-
         self.ping_outstanding = False
 
         if self.heartbeat_period > 0:
@@ -224,6 +288,8 @@ class ParamClient():
             self.paramcmd_timer = None
 
     def param_timer_tick(self):
+        if self.debug:
+            print('[%s] timeout on param' % self.basekey)
         self.param_state = 'Down'
         self.update_state('Timeout')
 
@@ -286,20 +352,23 @@ class ParamClient():
             self.is_ready = True
             self.start()
 
-    def key_update(self, rpin, lpin):
-        # if rpin.HasField('halfloat'):
-        #     lpin.value = float(rpin.halfloat)
-        #     lpin.synced = True
-        # elif rpin.HasField('halbit'):
-        #     lpin.value = bool(rpin.halbit)
-        #     lpin.synced = True
-        # elif rpin.HasField('hals32'):
-        #     lpin.value = int(rpin.hals32)
-        #     lpin.synced = True
-        # elif rpin.HasField('halu32'):
-        #     lpin.value = int(rpin.halu32)
-        #     lpin.synced = True
-        pass
+    def key_update(self, rkey, lkey):
+        if rkey.HasField('paramstring'):
+            lkey.value = str(rkey.paramstring)
+            lkey.synced = True
+        elif rkey.HasField('parambinary'):
+            lkey.value = bytes(rkey.parambinary)
+            lkey.synced = True
+        elif rkey.HasField('paramint'):
+            lkey.value = int(rkey.paramint)
+            lkey.synced = True
+        elif rkey.HasField('parambool'):
+            lkey.value = bytes(rkey.parambool)
+            lkey.synced = True
+        elif rkey.HasField('paramdouble'):
+            lkey.value = float(rkey.paramdouble)
+            lkey.synced = True
+        # TODO handle list
 
     def key_change(self, key):
         if self.debug:
@@ -308,16 +377,27 @@ class ParamClient():
         if self.state != 'Connected':  # accept only when connected
             return
 
-        # This message MUST carry a Pin message for each pin which has
+        # This message MUST carry a ParamKey message for each pin which has
         # changed value since the last message of this type.
-        # Each Pin message MUST carry the handle field.
+        # Each Pin message MUST carry the name field.
         # Each Pin message MAY carry the name field.
         # Each Pin message MUST carry the type field
-        # Each Pin message MUST - depending on pin type - carry a halbit,
-        # halfloat, hals32, or halu32 field.
+        # Each Pin message MUST - depending on pin type - carry a paramstring,
+        # parambinary, paramint, parambool, paramdouble, paramlist field.
         with self.tx_lock:
-            # TODO
-            pass
+            k = self.tx.key.add()
+            k.type = key.keytype
+            if k.type == PARAM_STRING:
+                k.paramstring = str(key.value)
+            elif k.type == PARAM_BINARY:
+                k.parambinary = bytes(key.value)
+            elif k.type == PARAM_INTEGER:
+                k.paramint = int(key.value)
+            elif k.type == PARAM_DOUBLE:
+                k.paramdoube = float(key.value)
+            elif k.type == PARAM_LIST:
+                pass  # TODO: implement
+            self.send_cmd(MT_PARAM_SET)
 
     def subscribe(self):
         self.param_state = 'Trying'
