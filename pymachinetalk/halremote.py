@@ -346,6 +346,7 @@ class RemoteComponent():
                     self.connected = False
                     self.connected_condition.notify()
                 self.stop_halrcomp_heartbeat()
+                self.unsync_pins()
                 print('[%s] disconnected' % self.name)
                 for func in self.on_connected_changed:
                     func(self.connected)
