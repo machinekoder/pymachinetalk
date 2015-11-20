@@ -664,9 +664,6 @@ class ApplicationCommand():
         self.heartbeat_timer.start()  # rearm timer
 
     def start_command_heartbeat(self):
-        if not self.connected:
-            return
-
         self.ping_error_count = 0  # reset heartbeat
 
         if self.heartbeat_period > 0:

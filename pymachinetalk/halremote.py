@@ -187,7 +187,7 @@ class RemoteComponent():
             for rpin in self.rx.pin:
                 lpin = self.pinsbyhandle[rpin.handle]
                 self.pin_update(rpin, lpin)
-                self.refresh_halrcomp_heartbeat()
+            self.refresh_halrcomp_heartbeat()
 
         elif self.rx.type == MT_HALRCOMP_FULL_UPDATE:
             comp = self.rx.comp[0]
@@ -285,9 +285,6 @@ class RemoteComponent():
         self.halrcmd_timer.start()  # rearm timer
 
     def start_halrcmd_heartbeat(self):
-        if not self.connected:
-            return
-
         self.ping_outstanding = False
 
         if self.heartbeat_period > 0:
@@ -301,6 +298,8 @@ class RemoteComponent():
             self.halrcmd_timer = None
 
     def halrcomp_timer_tick(self):
+        if self.debug:
+            print('[%s] timeout on halrcomp' % self.name)
         self.halrcomp_state = 'Down'
         self.update_state('Timeout')
 
