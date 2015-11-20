@@ -19,7 +19,24 @@ class BasicClass():
 
         self.paramReady = False
         self.paramcmdReady = False
-        self.param = param.ParamClient('system/testus', debug=True)
+        self.param = param.ParamClient('system/machinekit/cnc', debug=True)
+
+        self.change_timer = None
+
+    def change_key(self):
+        self.param['system/machinekit/cnc/AXIS_0/MAX_VELOCITY'] = 1.2
+        self.change_timer = threading.Timer(1.0, self.change_key)
+        self.change_timer.start()
+
+    def start_change_timer(self):
+        self.change_timer = threading.Timer(1.0, self.change_key)
+        self.change_timer.start()
+
+    def stop_change_timer(self):
+        if self.change_timer is None:
+            return
+        self.change_timer.cancel()
+        self.change_timer = None
 
     def start_sd(self, uuid):
         param_sd = ServiceDiscovery(service_type="_param._sub._machinekit._tcp", uuid=uuid)
@@ -57,8 +74,10 @@ class BasicClass():
     def start_param(self):
         print('connecting param client %s' % self.param.basekey)
         self.param.ready()
+        self.start_change_timer()
 
     def stop(self):
+        self.stop_change_timer()
         self.param.stop()
 
 

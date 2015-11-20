@@ -6,7 +6,8 @@ import threading
 
 # protobuf
 from machinetalk.protobuf.message_pb2 import Container
-from machinetalk.protobuf.types_pb2 import * 
+from machinetalk.protobuf.types_pb2 import *
+from machinetalk.protobuf.param_pb2 import *
 
 
 class Key():
@@ -71,7 +72,7 @@ class Key():
             self.value = value
             self.synced = False
             if self.parent:
-                self.parent.pin_change(self)
+                self.parent.key_change(self)
 
     def get(self):
         return self.value
@@ -163,6 +164,7 @@ class ParamClient():
                     lkey = Key()
                     lkey.name = name
                     lkey.keytype = rkey.type
+                    lkey.parent = self
                     self.keysbyname[name] = lkey
                 #lkey.handle = rkey.hanlde
                 #self.keysbyhandle[rkey.handle] = lkey
@@ -336,6 +338,7 @@ class ParamClient():
                     self.connected = False
                     self.connected_condition.notify()
                 self.stop_param_heartbeat()
+                self.unsync_keys()
                 print('[%s] disconnected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
@@ -346,6 +349,10 @@ class ParamClient():
 
     def update_error(self, error, description):
         print('[%s] error: %s %s' % (self.basekey, error, description))
+
+    def unsync_keys(self):
+        for key in self.keysbyname:
+            key.synced = False
 
     def ready(self):
         if not self.is_ready:
@@ -368,7 +375,8 @@ class ParamClient():
         elif rkey.HasField('paramdouble'):
             lkey.value = float(rkey.paramdouble)
             lkey.synced = True
-        # TODO handle list
+        elif rkey.HasField('paramlist'):
+            pass # TODO handle list
 
     def key_change(self, key):
         if self.debug:
@@ -386,6 +394,7 @@ class ParamClient():
         # parambinary, paramint, parambool, paramdouble, paramlist field.
         with self.tx_lock:
             k = self.tx.key.add()
+            k.name = key.name
             k.type = key.keytype
             if k.type == PARAM_STRING:
                 k.paramstring = str(key.value)
@@ -398,6 +407,31 @@ class ParamClient():
             elif k.type == PARAM_LIST:
                 pass  # TODO: implement
             self.send_cmd(MT_PARAM_SET)
+
+    def getkey(self, name):
+        return self.keysbyname[name]
+
+    # create a new Key
+    def newkey(self, name, keytype, value):
+        if not self.connected:
+            return
+
+        key = Key()
+        key.name = name
+        key.keytype = keytype
+        key.value = value
+        key.parent = self
+        self.keysbyname[name] = key
+        self.key_change(key)
+
+    # removes a key
+    def rmkey(self, name):
+        if not self.connected:
+            return
+
+        with self.tx_lock:
+            self.tx.name = name
+            self.send_cmd(MT_PARAM_DELETE)
 
     def subscribe(self):
         self.param_state = 'Trying'
