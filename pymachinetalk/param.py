@@ -178,6 +178,11 @@ class ParamClient():
                 interval = self.rx.pparams.keepalive_timer
                 self.start_param_heartbeat(interval * 2)
 
+        elif self.rx.type == MT_PARAM_ERROR:
+            self.param_state = 'Down'
+            self.update_state('Error')
+            self.update_error('param', self.rx.note)
+
         elif self.rx.type == MT_PING:
             if self.param_state == 'Up':
                 self.refresh_param_heartbeat()
@@ -185,11 +190,6 @@ class ParamClient():
                 self.update_state('Connecting')
                 self.unsubscribe()  # clean up previous subscription
                 self.subscribe()  # trigger a fresh subscribe -> full update
-
-        elif self.rx.type == MT_PARAM_ERROR:
-            self.param_state = 'Down'
-            self.update_state('Error')
-            self.update_error('param', self.rx.note)
 
         else:
             print('[%s] Warning: param receiced unsupported message' % self.basekey)
@@ -240,9 +240,10 @@ class ParamClient():
         self.disconnect_sockets()
 
     def connect_sockets(self):
-        self.sockets_connected = True
-        self.paramcmd_socket.connect(self.paramcmd_uri)
-        self.param_socket.connect(self.param_uri)
+        if not self.sockets_connected:
+            self.sockets_connected = True
+            self.paramcmd_socket.connect(self.paramcmd_uri)
+            self.param_socket.connect(self.param_uri)
 
         return True
 
