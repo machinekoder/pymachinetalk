@@ -19,7 +19,7 @@ class BasicClass():
 
         self.paramReady = False
         self.paramcmdReady = False
-        self.param = param.ParamClient('system/machinekit/cnc', debug=True)
+        self.param = param.ParamClient('system/machinekit/cnc', debug=False)
 
         self.change_timer = None
 

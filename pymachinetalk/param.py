@@ -1,10 +1,9 @@
-import uuid
-import platform
-
-import zmq
 import threading
 
 # protobuf
+from pymachinetalk.common import Subscriber
+from pymachinetalk.common import Client
+import pymachinetalk.common as common
 from machinetalk.protobuf.message_pb2 import Container
 from machinetalk.protobuf.types_pb2 import *
 from machinetalk.protobuf.param_pb2 import *
@@ -79,11 +78,14 @@ class Key():
 
 
 class ParamClient():
+    DISCONNECTED = 0
+    CONNECTING = 1
+    CONNECTED = 2
+    TIMEOUT = 3
+    ERROR = 4
+
     def __init__(self, basekey, debug=False):
         self.threads = []
-        self.shutdown = threading.Event()
-        self.tx_lock = threading.Lock()
-        self.timer_lock = threading.Lock()
         self.connected_condition = threading.Condition(threading.Lock())
 
         self.debug = debug
@@ -94,68 +96,39 @@ class ParamClient():
         self.basekey = basekey
         self.keysbyname = {}
         self.is_ready = False
+        self.state = self.DISCONNECTED
 
+        debuglevel = (debug) * 1
+        self.subscriber = Subscriber(debuglevel=debuglevel, debugname='param')
+        self.subscriber.topics.add(basekey)
+        self.subscriber.message_received_cb = self.param_msg_received
+        self.subscriber.state_changed_cb = self.socket_state_changed
+        self.client = Client(debuglevel=debuglevel, debugname='paramcmd')
+        self.client.message_received_cb = self.paramcmd_msg_received
+        self.client.state_changed_cb = self.socket_state_changed
+
+        self.connected = False
         self.param_uri = ''
         self.paramcmd_uri = ''
-        self.connected = False
-        self.heartbeat_period = 3000
-        self.ping_outstanding = False
-        self.state = 'Disconnected'
-        self.param_state = 'Down'
-        self.paramcmd_state = 'Down'
-        self.param_period = 0
-        self.param_timer = None
-        self.paramcmd_timer = None
 
         # more efficient to reuse a protobuf message
         self.tx = Container()
-        self.rx = Container()
 
-        # ZeroMQ
-        client_id = '%s-%s' % (platform.node(), uuid.uuid4())  # must be unique
-        context = zmq.Context()
-        context.linger = 0
-        self.context = context
-        self.paramcmd_socket = self.context.socket(zmq.DEALER)
-        self.paramcmd_socket.setsockopt(zmq.LINGER, 0)
-        self.paramcmd_socket.setsockopt(zmq.IDENTITY, client_id)
-        self.param_socket = self.context.socket(zmq.SUB)
-        self.sockets_connected = False
-
-    def socket_worker(self):
-        poll = zmq.Poller()
-        poll.register(self.param_socket, zmq.POLLIN)
-        poll.register(self.paramcmd_socket, zmq.POLLIN)
-
-        while not self.shutdown.is_set():
-            s = dict(poll.poll(200))
-            if self.paramcmd_socket in s:
-                self.process_paramcmd()
-            if self.param_socket in s:
-                self.process_param()
-
-    def process_param(self):
-        (topic, msg) = self.param_socket.recv_multipart()
-        self.rx.ParseFromString(msg)
-
-        if topic != self.basekey:  # ignore uninteresting messages
-            return
-
+    def param_msg_received(self, topic, rx):
         if self.debug:
             print('[%s] received message on param: topic %s' % (self.basekey, topic))
-            print(self.rx)
+            #print(self.rx)
 
-        if self.rx.type == MT_PARAM_INCREMENTAL_UPDATE:
-            for rkey in self.rx.key:
+        if rx.type == MT_PARAM_INCREMENTAL_UPDATE:
+            for rkey in rx.key:
                 if rkey.HasField('deleted') and rkey.deleted:
                     self.keysbyname.pop(rkey.name)
                 else:
                     lkey = self.keysbyname[rkey.name]
-                self.key_update(rkey, lkey)
-            self.refresh_param_heartbeat()
+                    self.key_update(rkey, lkey)
 
-        elif self.rx.type == MT_PARAM_FULL_UPDATE:
-            for rkey in self.rx.key:
+        elif rx.type == MT_PARAM_FULL_UPDATE:
+            for rkey in rx.key:
                 name = rkey.name
                 lkey = None
                 if name in self.keysbyname:
@@ -170,180 +143,67 @@ class ParamClient():
                 #self.keysbyhandle[rkey.handle] = lkey
                 self.key_update(rkey, lkey)
 
-            if self.param_state != 'Up':  # will be executed only once
-                self.param_state = 'Up'
-                self.update_state('Connected')
-
-            if self.rx.HasField('pparams'):
-                interval = self.rx.pparams.keepalive_timer
-                self.start_param_heartbeat(interval * 2)
-
-        elif self.rx.type == MT_PARAM_ERROR:
-            self.param_state = 'Down'
+        elif rx.type == MT_PARAM_ERROR:
             self.update_state('Error')
-            self.update_error('param', self.rx.note)
-
-        elif self.rx.type == MT_PING:
-            if self.param_state == 'Up':
-                self.refresh_param_heartbeat()
-            else:
-                self.update_state('Connecting')
-                self.unsubscribe()  # clean up previous subscription
-                self.subscribe()  # trigger a fresh subscribe -> full update
+            self.update_error('param', rx.note)
 
         else:
             print('[%s] Warning: param receiced unsupported message' % self.basekey)
 
-    def process_paramcmd(self):
-        msg = self.paramcmd_socket.recv()
-        self.rx.ParseFromString(msg)
+    def paramcmd_msg_received(self, rx):
         if self.debug:
             print('[%s] received message on paramcmd:' % self.basekey)
-            print(self.rx)
+            #print(self.rx)
 
-        if self.rx.type == MT_PING_ACKNOWLEDGE:
-            self.ping_outstanding = False
-            if self.paramcmd_state == 'Trying':
-                self.paramcmd_state = 'Up'
-                self.update_state('Connecting')
-                self.subscribe()
+        if rx.type == MT_PING_ACKNOWLEDGE:  # we never will receive this here
+            pass
 
         else:
             print('[%s] Warning: paramcmd receiced unsupported message' % self.basekey)
 
     def start(self):
-        self.paramcmd_state = 'Trying'
-        self.update_state('Connecting')
-
-        if self.connect_sockets():
-            self.shutdown.clear()  # in case we already used the component
-            self.threads.append(threading.Thread(target=self.socket_worker))
-            for thread in self.threads:
-                thread.start()
-            self.start_paramcmd_heartbeat()
-            with self.tx_lock:
-                self.send_cmd(MT_PING)
+        self.update_state(self.CONNECTING)
+        self.subscriber.uri = self.param_uri
+        self.subscriber.start()
+        self.client.uri = self.paramcmd_uri
+        self.client.start()
 
     def stop(self):
         self.is_ready = False
-        self.shutdown.set()
-        for thread in self.threads:
-            thread.join()
-        self.threads = []
-        self.cleanup()
-        self.update_state('Disconnected')
+        self.subscriber.stop()
+        self.client.stop()
+        self.update_state(self.DISCONNECTED)
 
-    def cleanup(self):
-        if self.connected:
-            self.unsubscribe()
-        self.stop_paramcmd_heartbeat()
-        self.disconnect_sockets()
-
-    def connect_sockets(self):
-        if not self.sockets_connected:
-            self.sockets_connected = True
-            self.paramcmd_socket.connect(self.paramcmd_uri)
-            self.param_socket.connect(self.param_uri)
-
-        return True
-
-    def disconnect_sockets(self):
-        if self.sockets_connected:
-            self.paramcmd_socket.disconnect(self.paramcmd_uri)
-            self.param_socket.disconnect(self.param_uri)
-            self.sockets_connected = False
-
-    def send_cmd(self, msg_type):
-        self.tx.type = msg_type
-        if self.debug:
-            print('[%s] sending message: %s' % (self.basekey, msg_type))
-            print(str(self.tx))
-        self.paramcmd_socket.send(self.tx.SerializeToString(), zmq.NOBLOCK)
-        self.tx.Clear()
-
-    def paramcmd_timer_tick(self):
-        if not self.connected:
-            return
-
-        if self.ping_outstanding:
-            self.paramcmd_state = 'Trying'
-            self.update_state('Timeout')
-
-        with self.tx_lock:
-            self.send_cmd(MT_PING)
-        self.ping_outstanding = True
-
-        self.paramcmd_timer = threading.Timer(self.heartbeat_period / 1000,
-                                             self.paramcmd_timer_tick)
-        self.paramcmd_timer.start()  # rearm timer
-
-    def start_paramcmd_heartbeat(self):
-        self.ping_outstanding = False
-
-        if self.heartbeat_period > 0:
-            self.paramcmd_timer = threading.Timer(self.heartbeat_period / 1000,
-                                                  self.paramcmd_timer_tick)
-            self.paramcmd_timer.start()
-
-    def stop_paramcmd_heartbeat(self):
-        if self.paramcmd_timer:
-            self.paramcmd_timer.cancel()
-            self.paramcmd_timer = None
-
-    def param_timer_tick(self):
-        if self.debug:
-            print('[%s] timeout on param' % self.basekey)
-        self.param_state = 'Down'
-        self.update_state('Timeout')
-
-    def start_param_heartbeat(self, interval):
-        self.timer_lock.acquire()
-        if self.param_timer:
-            self.param_timer.cancel()
-
-        self.param_period = interval
-        if interval > 0:
-            self.param_timer = threading.Timer(interval / 1000,
-                                               self.param_timer_tick)
-            self.param_timer.start()
-        self.timer_lock.release()
-
-    def stop_param_heartbeat(self):
-        self.timer_lock.acquire()
-        if self.param_timer:
-            self.param_timer.cancel()
-            self.param_timer = None
-        self.timer_lock.release()
-
-    def refresh_param_heartbeat(self):
-        self.timer_lock.acquire()
-        if self.param_timer:
-            self.param_timer.cancel()
-            self.param_timer = threading.Timer(self.param_period / 1000,
-                                               self.param_timer_tick)
-            self.param_timer.start()
-        self.timer_lock.release()
+    def socket_state_changed(self, state):
+        del state
+        sub_state = self.subscriber.state
+        cli_state = self.client.state
+        if sub_state == common.UP and cli_state == common.UP:
+            self.update_state(self.CONNECTED)
+        else:
+            self.update_state(self.CONNECTING)
 
     def update_state(self, state):
         if state != self.state:
             self.state = state
-            if state == 'Connected':
+            if state == self.CONNECTED:
                 with self.connected_condition:
                     self.connected = True
                     self.connected_condition.notify()
-                print('[%s] connected' % self.basekey)
+                if self.debug:
+                    print('[%s] connected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
             elif self.connected:
                 with self.connected_condition:
                     self.connected = False
                     self.connected_condition.notify()
-                self.stop_param_heartbeat()
                 self.unsync_keys()
-                print('[%s] disconnected' % self.basekey)
+                if self.debug:
+                    print('[%s] disconnected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
-            elif state == 'Error':
+            elif state == self.ERROR:
                 with self.connected_condition:
                     self.connected = False
                     self.connected_condition.notify()  # notify even if not connected
@@ -353,7 +213,7 @@ class ParamClient():
 
     def unsync_keys(self):
         for key in self.keysbyname:
-            key.synced = False
+            self.keysbyname[key].synced = False
 
     def ready(self):
         if not self.is_ready:
@@ -383,7 +243,7 @@ class ParamClient():
         if self.debug:
             print('[%s] key change %s' % (self.basekey, key.name))
 
-        if self.state != 'Connected':  # accept only when connected
+        if self.state != self.CONNECTED:  # accept only when connected
             return
 
         # This message MUST carry a ParamKey message for each pin which has
@@ -393,21 +253,20 @@ class ParamClient():
         # Each Pin message MUST carry the type field
         # Each Pin message MUST - depending on pin type - carry a paramstring,
         # parambinary, paramint, parambool, paramdouble, paramlist field.
-        with self.tx_lock:
-            k = self.tx.key.add()
-            k.name = key.name
-            k.type = key.keytype
-            if k.type == PARAM_STRING:
-                k.paramstring = str(key.value)
-            elif k.type == PARAM_BINARY:
-                k.parambinary = bytes(key.value)
-            elif k.type == PARAM_INTEGER:
-                k.paramint = int(key.value)
-            elif k.type == PARAM_DOUBLE:
-                k.paramdoube = float(key.value)
-            elif k.type == PARAM_LIST:
-                pass  # TODO: implement
-            self.send_cmd(MT_PARAM_SET)
+        k = self.tx.key.add()
+        k.name = key.name
+        k.type = key.keytype
+        if k.type == PARAM_STRING:
+            k.paramstring = str(key.value)
+        elif k.type == PARAM_BINARY:
+            k.parambinary = bytes(key.value)
+        elif k.type == PARAM_INTEGER:
+            k.paramint = int(key.value)
+        elif k.type == PARAM_DOUBLE:
+            k.paramdoube = float(key.value)
+        elif k.type == PARAM_LIST:
+            pass  # TODO: implement
+        self.client.send_message(MT_PARAM_SET, self.tx)
 
     def getkey(self, name):
         return self.keysbyname[name]
@@ -430,17 +289,8 @@ class ParamClient():
         if not self.connected:
             return
 
-        with self.tx_lock:
-            self.tx.name = name
-            self.send_cmd(MT_PARAM_DELETE)
-
-    def subscribe(self):
-        self.param_state = 'Trying'
-        self.param_socket.setsockopt(zmq.SUBSCRIBE, self.basekey)
-
-    def unsubscribe(self):
-        self.param_state = 'Down'
-        self.param_socket.setsockopt(zmq.UNSUBSCRIBE, self.basekey)
+        self.tx.name = name
+        self.client.send_message(MT_PARAM_DELETE, self.tx)
 
     def __getitem__(self, k):
         return self.keysbyname[k].get()

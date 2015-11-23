@@ -380,7 +380,7 @@ class RemoteComponent():
 
     def unsync_pins(self):
         for pin in self.pinsbyname:
-            pin.synced = False
+            self.pinsbyname[pin].synced = False
 
     def getpin(self, name):
         return self.pinsbyname[name]
