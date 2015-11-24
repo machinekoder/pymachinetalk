@@ -19,17 +19,17 @@ class BasicClass():
 
         self.paramReady = False
         self.paramcmdReady = False
-        self.param = param.ParamClient('system/machinekit/cnc', debug=False)
+        self.param = param.ParamClient('system/machinekit/cnc', debug=True)
 
         self.change_timer = None
 
     def change_key(self):
         self.param['system/machinekit/cnc/AXIS_0/MAX_VELOCITY'] = 1.2
-        self.change_timer = threading.Timer(1.0, self.change_key)
+        self.change_timer = threading.Timer(3.0, self.change_key)
         self.change_timer.start()
 
     def start_change_timer(self):
-        self.change_timer = threading.Timer(1.0, self.change_key)
+        self.change_timer = threading.Timer(3.0, self.change_key)
         self.change_timer.start()
 
     def stop_change_timer(self):
