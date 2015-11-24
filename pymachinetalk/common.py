@@ -206,6 +206,7 @@ class Subscriber():
         self.timer_lock.acquire()
         if self.heartbeat_timer:
             self.heartbeat_timer.cancel()
+            self.heartbeat_timer = None
 
         if self.heartbeat_period > 0:
             self.heartbeat_timer = threading.Timer(self.heartbeat_period / 1000,
@@ -271,7 +272,8 @@ class Client():
         self.timer_lock = threading.Lock()
 
         self.uri = ''
-        self.heartbeat_period = 3000
+        self.service = ''
+        self.heartbeat_period = 2500
         self.ping_error_count = 0
         self.ping_error_threshold = 2
         self.state = DOWN
@@ -311,11 +313,10 @@ class Client():
             if self.debuglevel > 1:
                 print(self.rx)
 
-        if self.rx.type == MT_PING_ACKNOWLEDGE:
-            self.ping_error_count = 0
-            if self.state == TRYING:
-                self.update_state(UP)
-                # update state connecting
+        self.ping_error_count = 0  # any message counts as heartbeat since messages can be queued
+        if self.state == TRYING:
+            self.update_state(UP)
+            # update state connecting
 
         if self.state == UP and self.rx.type != MT_PING_ACKNOWLEDGE:
             self.message_received_cb(self.rx)
@@ -330,7 +331,8 @@ class Client():
             self.threads.append(threading.Thread(target=self.socket_worker))
             for thread in self.threads:
                 thread.start()
-            self.start_heartbeat()
+            self.ping_error_count = 0  # reset the error count
+            self.refresh_heartbeat()  # start the heartbeat
             self.send_message(MT_PING, self.tx)
 
     def stop(self):
@@ -357,25 +359,37 @@ class Client():
         self.send_message(MT_PING, self.tx)
         self.ping_error_count += 1
 
-        if self.ping_error_count > self.ping_error_threshold:
+        if self.ping_error_count > self.ping_error_threshold and self.state == UP:
             self.update_state(TRYING)
+            if self.debuglevel > 0:
+                print('[%s] timeout' % self.debugname)
 
+        self.timer_lock.acquire()
         self.heartbeat_timer = threading.Timer(self.heartbeat_period / 1000,
                                                self.heartbeat_tick)
         self.heartbeat_timer.start()  # rearm timer
+        self.timer_lock.release()
 
-    def start_heartbeat(self):
-        self.ping_error_count = 0
+    def refresh_heartbeat(self):
+        self.timer_lock.acquire()
+        if self.heartbeat_timer:
+            self.heartbeat_timer.cancel()
+            self.heartbeat_timer = None
 
         if self.heartbeat_period > 0:
             self.heartbeat_timer = threading.Timer(self.heartbeat_period / 1000,
                                                    self.heartbeat_tick)
             self.heartbeat_timer.start()
+        self.timer_lock.release()
+        if self.debuglevel > 0:
+            print('[%s] heartbeat updated' % self.debugname)
 
     def stop_heartbeat(self):
+        self.timer_lock.acquire()
         if self.heartbeat_timer:
             self.heartbeat_timer.cancel()
             self.heartbeat_timer = None
+        self.timer_lock.release()
 
     def update_state(self, state):
         if self.state == state:
@@ -396,3 +410,5 @@ class Client():
         with self.tx_lock:
             self.socket.send(tx.SerializeToString(), zmq.NOBLOCK)
         tx.Clear()
+        if msg_type != MT_PING:
+            self.refresh_heartbeat()  # do not send pings when messages are sent
