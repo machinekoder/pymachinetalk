@@ -144,7 +144,7 @@ class ParamClient():
                 self.key_update(rkey, lkey)
 
         elif rx.type == MT_PARAM_ERROR:
-            self.update_state('Error')
+            self.update_state(self.ERROR)
             self.update_error('param', rx.note)
 
         else:
@@ -282,7 +282,7 @@ class ParamClient():
         key.value = value
         key.parent = self
         self.keysbyname[name] = key
-        self.key_change(key)
+        self.key_change(key)  # the key change sends a message
 
     # removes a key
     def rmkey(self, name):
