@@ -162,7 +162,7 @@ class ParamClient():
             print('[%s] Warning: paramcmd receiced unsupported message' % self.basekey)
 
     def start(self):
-        self.update_state(self.CONNECTING)
+        #self.update_state(self.CONNECTING)
         self.subscriber.uri = self.param_uri
         self.subscriber.start()
         self.client.uri = self.paramcmd_uri
@@ -172,7 +172,7 @@ class ParamClient():
         self.is_ready = False
         self.subscriber.stop()
         self.client.stop()
-        self.update_state(self.DISCONNECTED)
+        #self.update_state(self.DISCONNECTED)
 
     def socket_state_changed(self, state):
         del state
@@ -180,8 +180,12 @@ class ParamClient():
         cli_state = self.client.state
         if sub_state == common.UP and cli_state == common.UP:
             self.update_state(self.CONNECTED)
-        else:
+        elif sub_state == common.TIMEOUT or cli_state == common.TIMEOUT:
+            self.update_state(self.TIMEOUT)
+        elif sub_state == common.TRYING or cli_state == common.TRYING:
             self.update_state(self.CONNECTING)
+        else:
+            self.update_state(self.DISCONNECTED)
 
     def update_state(self, state):
         if state != self.state:
@@ -190,8 +194,6 @@ class ParamClient():
                 with self.connected_condition:
                     self.connected = True
                     self.connected_condition.notify()
-                if self.debug:
-                    print('[%s] connected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
             elif self.connected:
@@ -199,14 +201,16 @@ class ParamClient():
                     self.connected = False
                     self.connected_condition.notify()
                 self.unsync_keys()
-                if self.debug:
-                    print('[%s] disconnected' % self.basekey)
                 for func in self.on_connected_changed:
                     func(self.connected)
             elif state == self.ERROR:
                 with self.connected_condition:
                     self.connected = False
                     self.connected_condition.notify()  # notify even if not connected
+            if self.debug:
+                states = {self.CONNECTED: 'CONNECTED', self.CONNECTING: 'CONNECTING',
+                          self.TIMEOUT: 'TIMEOUT', self.DISCONNECTED: 'DISCONNECTED'}
+                print('[%s] %s' % (self.basekey, states[self.state]))
 
     def update_error(self, error, description):
         print('[%s] error: %s %s' % (self.basekey, error, description))

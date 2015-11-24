@@ -110,6 +110,7 @@ from machinetalk.protobuf.types_pb2 import *
 DOWN = 0
 TRYING = 1
 UP = 2
+TIMEOUT = 3
 
 
 class Subscriber():
@@ -161,7 +162,7 @@ class Subscriber():
                 print(str(msg))
 
         if self.rx.type == MT_PARAM_FULL_UPDATE:
-            if not self.state == UP:
+            if self.state != UP:
                 self.update_state(UP)
                 # update state connected
 
@@ -190,9 +191,7 @@ class Subscriber():
             self.socket.setsockopt(zmq.UNSUBSCRIBE, topic)
 
     def heartbeat_tick(self):
-        if self.debuglevel > 0:
-            print('[%s] timeout' % self.debugname)
-        self.update_state(DOWN)
+        self.update_state(TIMEOUT)
         # update state timeout
 
     def stop_heartbeat(self):
@@ -236,7 +235,7 @@ class Subscriber():
         if self.state_changed_cb:
             self.state_changed_cb(state)
         if self.debuglevel > 0:
-            states = {DOWN: 'DOWN', TRYING: 'TRYING', UP: 'UP'}
+            states = {DOWN: 'DOWN', TRYING: 'TRYING', UP: 'UP', TIMEOUT: 'TIMEOUT'}
             print('[%s] updated state: %s' % (self.debugname, states[state]))
 
     def start(self):
@@ -259,6 +258,7 @@ class Subscriber():
         for thread in self.threads:
             thread.join()  # join threads with the main thread
         self.threads = []
+        self.stop_heartbeat()
         self.disconnect()
 
 
@@ -314,7 +314,7 @@ class Client():
                 print(self.rx)
 
         self.ping_error_count = 0  # any message counts as heartbeat since messages can be queued
-        if self.state == TRYING:
+        if self.state != UP:
             self.update_state(UP)
             # update state connecting
 
@@ -360,9 +360,7 @@ class Client():
         self.ping_error_count += 1
 
         if self.ping_error_count > self.ping_error_threshold and self.state == UP:
-            self.update_state(TRYING)
-            if self.debuglevel > 0:
-                print('[%s] timeout' % self.debugname)
+            self.update_state(TIMEOUT)
 
         self.timer_lock.acquire()
         self.heartbeat_timer = threading.Timer(self.heartbeat_period / 1000,
@@ -398,7 +396,7 @@ class Client():
         if self.state_changed_cb:
             self.state_changed_cb(state)
         if self.debuglevel > 0:
-            states = {DOWN: 'DOWN', TRYING: 'TRYING', UP: 'UP'}
+            states = {DOWN: 'DOWN', TRYING: 'TRYING', UP: 'UP', TIMEOUT: 'TIMEOUT'}
             print('[%s] updated state: %s' % (self.debugname, states[state]))
 
     def send_message(self, msg_type, tx):
