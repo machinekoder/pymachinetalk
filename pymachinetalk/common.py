@@ -107,10 +107,12 @@ import uuid
 from machinetalk.protobuf.message_pb2 import Container
 from machinetalk.protobuf.types_pb2 import *
 
+# Socket states
 DOWN = 0
 TRYING = 1
 UP = 2
 TIMEOUT = 3
+ERROR = 4
 
 
 class Subscriber():
@@ -222,6 +224,7 @@ class Subscriber():
         return True
 
     def disconnect(self):
+        self.update_state(DOWN)
         for pub in self.publishers:
             self.socket.disconnect(pub)
         self.publishers.clear()
@@ -251,7 +254,6 @@ class Subscriber():
         if not self.started:
             return
         self.started = False
-        self.update_state(DOWN)
         self.shutdown.set()
         for thread in self.threads:
             thread.join()  # join threads with the main thread
@@ -312,11 +314,9 @@ class Client():
                 print(self.rx)
 
         self.ping_error_count = 0  # any message counts as heartbeat since messages can be queued
-        if self.state != UP:
-            self.update_state(UP)
-            # update state connecting
+        self.update_state(UP)
 
-        if self.state == UP and self.rx.type != MT_PING_ACKNOWLEDGE:
+        if self.rx.type != MT_PING_ACKNOWLEDGE:  # ping acknowlege is uninteresting
             self.message_received_cb(self.rx)
 
     def start(self):
@@ -337,7 +337,6 @@ class Client():
         if not self.started:
             return
         self.started = False
-        self.update_state(DOWN)
         self.shutdown.set()
         for thread in self.threads:
             thread.join()
@@ -351,6 +350,7 @@ class Client():
         return True
 
     def disconnect(self):
+        self.update_state(DOWN)
         self.socket.disconnect(self.service)
 
     def heartbeat_tick(self):
