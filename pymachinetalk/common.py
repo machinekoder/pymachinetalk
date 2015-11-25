@@ -162,25 +162,23 @@ class Subscriber():
                 print(str(msg))
 
         if self.rx.type == MT_PARAM_FULL_UPDATE:
-            if self.state != UP:
-                self.update_state(UP)
-                # update state connected
+            self.update_state(UP)
 
             if self.rx.HasField('pparams'):
                 interval = self.rx.pparams.keepalive_timer
                 self.heartbeat_period = interval * 2  # TODO: make configurable
 
         if self.state == UP:
-            self.refresh_heartbeat()
+            self.refresh_heartbeat()  # refresh heartbeat if any message is received
             if self.rx.type != MT_PING:
                 self.message_received_cb(topic, self.rx)
         else:
-            # update state connecting
             self.unsubscribe()  # clean up previous subscription
             self.subscribe()  # trigger a fresh subscribe -> full update
 
     def subscribe(self):
         self.update_state(TRYING)
+        self.heartbeat_period = 0  # reset heartbeat
         for topic in self.topics:
             self.socket.setsockopt(zmq.SUBSCRIBE, topic)
             self.subscriptions.add(topic)
@@ -189,10 +187,10 @@ class Subscriber():
         self.update_state(DOWN)
         for topic in self.subscriptions:
             self.socket.setsockopt(zmq.UNSUBSCRIBE, topic)
+        self.subscriptions.clear()
 
     def heartbeat_tick(self):
         self.update_state(TIMEOUT)
-        # update state timeout
 
     def stop_heartbeat(self):
         self.timer_lock.acquire()
