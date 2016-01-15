@@ -24,9 +24,11 @@ class ServiceTypeDatabase:
 
 class ServiceData():
     def __init__(self):
-        self.uuid = ''
-        self.dsn = ''
-        self.name = ''
+        self.uuid = None
+        self.instance = None
+        self.dsn = None
+        self.name = None
+        self.type = None
         self.txts = []
 
 
@@ -51,7 +53,10 @@ class ServiceDiscovery():
         try:
             loop = DBusGMainLoop()
             self.system_bus = dbus.SystemBus(mainloop=loop)
-            self.system_bus.add_signal_receiver(self.avahi_dbus_connect_cb, "NameOwnerChanged", "org.freedesktop.DBus", arg0="org.freedesktop.Avahi")
+            self.system_bus.add_signal_receiver(self.avahi_dbus_connect_cb,
+                                                "NameOwnerChanged",
+                                                "org.freedesktop.DBus",
+                                                arg0="org.freedesktop.Avahi")
         except dbus.DBusException, e:
             pprint.pprint(e)
             sys.exit(1)
@@ -104,30 +109,29 @@ class ServiceDiscovery():
             print("Service data for service '%s' of type '%s' (%s) in domain '%s' on %s.%i:" % (name, h_type, servicetype, domain, self.siocgifname(interface), protocol))
             print("\tHost %s (%s), port %i, TXT data: %s" % (host, address, port, avahi.txt_array_to_string_array(txt)))
 
-        txts = avahi.txt_array_to_string_array(txt)
+        data = ServiceData()
+        data.txts = avahi.txt_array_to_string_array(txt)
+        data.name = name
         match = False
-        dsn = None
-        uuid = None
-        for txt in txts:
+        for txt in data.txts:
             key, value = txt.split('=')
             if key == 'dsn':
-                dsn = value
+                data.dsn = value
+            elif key == 'service':
+                data.type = value
+            elif key == 'instance':
+                data.instance = value
             elif key == 'uuid':
-                uuid = value
+                data.uuid = value
                 match = self.uuid == value
         match = match or (self.uuid == '')
 
         if match:
-            data = ServiceData()
-            data.name = name
-            data.dsn = dsn
-            data.uuid = uuid
-            data.txts = txts
             with self.discovered_condition:
                 self.service_names[name] = data
                 self.discovered_condition.notify()
             if self.debug:
-                print('discovered: %s %s %s' % (name, dsn, uuid))
+                print('discovered: %s %s %s' % (name, data.dsn, data.uuid))
             for func in self.on_discovered:
                 func(data)
 
