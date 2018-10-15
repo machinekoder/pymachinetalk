@@ -229,7 +229,7 @@ def main():
     mki.read(mkini)
     uuid = mki.get("MACHINEKIT", "MKUUID")
 
-    ui = TerminalUI(uuid=uuid, use_curses=False)
+    ui = TerminalUI(uuid=uuid, use_curses=True)
     ui.start()
 
     try:
