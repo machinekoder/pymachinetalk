@@ -62,7 +62,6 @@ OPERATOR_DISPLAY = types.MT_EMC_OPERATOR_DISPLAY
 
 
 class ApplicationStatus(ComponentBase, StatusBase, ServiceContainer):
-
     def __init__(self, debug=False):
         StatusBase.__init__(self, debuglevel=int(debug))
         ComponentBase.__init__(self)
@@ -212,16 +211,24 @@ class ApplicationStatus(ComponentBase, StatusBase, ServiceContainer):
             recurse_descriptor(self._container.emc_status_io.DESCRIPTOR, self._io_data)
         elif channel == 'config':
             self._config_data = MessageObject()
-            recurse_descriptor(self._container.emc_status_config.DESCRIPTOR, self._config_data)
+            recurse_descriptor(
+                self._container.emc_status_config.DESCRIPTOR, self._config_data
+            )
         elif channel == 'motion':
             self._motion_data = MessageObject()
-            recurse_descriptor(self._container.emc_status_motion.DESCRIPTOR, self._motion_data)
+            recurse_descriptor(
+                self._container.emc_status_motion.DESCRIPTOR, self._motion_data
+            )
         elif channel == 'task':
             self._task_data = MessageObject()
-            recurse_descriptor(self._container.emc_status_task.DESCRIPTOR, self._task_data)
+            recurse_descriptor(
+                self._container.emc_status_task.DESCRIPTOR, self._task_data
+            )
         elif channel == 'interp':
             self._interp_data = MessageObject()
-            recurse_descriptor(self._container.emc_status_interp.DESCRIPTOR, self._interp_data)
+            recurse_descriptor(
+                self._container.emc_status_interp.DESCRIPTOR, self._interp_data
+            )
 
     def _update_motion_object(self, data):
         with self.motion_condition:
@@ -251,15 +258,15 @@ class ApplicationStatus(ComponentBase, StatusBase, ServiceContainer):
             self.interp_condition.notify()
 
     def _update_running(self):
-        running = ((self._task_data.task_mode == EMC_TASK_MODE_AUTO
-                    or self._task_data.task_mode == EMC_TASK_MODE_MDI)
-                   and self._interp_data.interp_state == EMC_TASK_INTERP_IDLE)
+        running = (
+            self._task_data.task_mode == EMC_TASK_MODE_AUTO
+            or self._task_data.task_mode == EMC_TASK_MODE_MDI
+        ) and self._interp_data.interp_state == EMC_TASK_INTERP_IDLE
 
         self.running = running
 
 
 class ApplicationCommand(ComponentBase, CommandBase, ServiceContainer):
-
     def __init__(self, debug=False):
         CommandBase.__init__(self, debuglevel=int(debug))
         ComponentBase.__init__(self)
@@ -305,7 +312,9 @@ class ApplicationCommand(ComponentBase, CommandBase, ServiceContainer):
 
     def wait_executed(self, ticket=None, timeout=None):
         with self.executed_condition:
-            if ticket and ticket <= self.executed_ticket:  # very likely that we already received the reply
+            if (
+                ticket and ticket <= self.executed_ticket
+            ):  # very likely that we already received the reply
                 return True
 
             while True:
@@ -318,7 +327,9 @@ class ApplicationCommand(ComponentBase, CommandBase, ServiceContainer):
 
     def wait_completed(self, ticket=None, timeout=None):
         with self.completed_condition:
-            if ticket and ticket < self.completed_ticket:  # very likely that we already received the reply
+            if (
+                ticket and ticket < self.completed_ticket
+            ):  # very likely that we already received the reply
                 return True
 
             while True:
@@ -729,7 +740,9 @@ class ApplicationCommand(ComponentBase, CommandBase, ServiceContainer):
         self.send_emc_traj_set_teleop_vector(self._tx)
         return self._take_ticket()
 
-    def set_tool_offset(self, index, zoffset, xoffset, diameter, frontangle, backangle, orientation):
+    def set_tool_offset(
+        self, index, zoffset, xoffset, diameter, frontangle, backangle, orientation
+    ):
         if not self.connected:
             return None
 
@@ -860,7 +873,6 @@ class ApplicationError(ComponentBase, ErrorBase, ServiceContainer):
 
 
 class ApplicationFile(ComponentBase, ServiceContainer):
-
     def __init__(self, debug=True):
         self._error_string = ''
         self.on_error_string_changed = []
@@ -933,8 +945,12 @@ class ApplicationFile(ComponentBase, ServiceContainer):
             ftp = ftplib.FTP()
             ftp.connect(host=o.hostname, port=o.port)
             ftp.login()
-            ftp.storbinary('STOR %s' % filename, f, blocksize=8192,
-                           callback=self._progress_callback)
+            ftp.storbinary(
+                'STOR %s' % filename,
+                f,
+                blocksize=8192,
+                callback=self._progress_callback,
+            )
             ftp.close()
             f.close()
         except Exception as e:
@@ -950,7 +966,7 @@ class ApplicationFile(ComponentBase, ServiceContainer):
         o = urlparse(self.file_uri)
         # test o.scheme
 
-        filename = self.remote_file_path[len(self.remote_path):]  # mid
+        filename = self.remote_file_path[len(self.remote_path) :]  # mid
         self.local_file_path = os.path.join(self.local_path, filename)
 
         self._update_state('DownloadRunning')  # lets start the upload
